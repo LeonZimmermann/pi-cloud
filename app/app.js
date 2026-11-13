@@ -1712,6 +1712,7 @@ function showApp() {
 async function whoAmI() {
   const res = await req('GET', '/api/me');
   ME = res.headers.get('X-PC-User') || '';
+  loadAvatar();
 }
 
 $('#login-form').addEventListener('submit', async (e) => {
@@ -1727,6 +1728,7 @@ $('#login-form').addEventListener('submit', async (e) => {
     const res = await fetch('/api/login', { headers: { 'X-PC-App': '1', Authorization: `Basic ${b64}` }, cache: 'no-store', credentials: 'same-origin' });
     if (!res.ok) throw new Error(res.status === 403 || res.status === 401 ? 'Benutzer oder Passwort ist falsch.' : `Serverfehler ${res.status}`);
     ME = res.headers.get('X-PC-User') || user;
+    loadAvatar();
     e.target.reset();
     Object.assign(photos, { items: [], albums: [], stale: true, at: 0 });
     state.route = { mode: null };
@@ -1741,9 +1743,135 @@ async function logout() {
   await fetch('/api/logout', { cache: 'no-store' }).catch(() => {});
   state.items = [];
   ME = '';
+  avatarUrl = null;
+  renderAvatars();
   Object.assign(photos, { items: [], albums: [], stale: true, at: 0 });
   showLogin();
 }
+
+// ---------- Profil ----------
+
+// Das Profilbild liegt als versteckte Datei im eigenen Bereich.
+const AVATAR_DIR = ['home', '.pi-cloud'];
+const AVATAR = [...AVATAR_DIR, 'avatar.jpg'];
+const AVATAR_SIZE = 384;
+let avatarUrl = null;
+
+function renderAvatars() {
+  const initial = (ME || '?').charAt(0).toUpperCase();
+  for (const el of [$('#menu-avatar'), $('#profile-avatar')]) {
+    el.textContent = initial;
+    el.classList.toggle('has-img', !!avatarUrl);
+    el.style.backgroundImage = avatarUrl ? `url("${avatarUrl}")` : '';
+  }
+  $('#avatar-remove').hidden = !avatarUrl;
+}
+
+function loadAvatar(bust = false) {
+  const url = fileUrl(AVATAR) + (bust ? `?v=${Date.now()}` : '');
+  const img = new Image();
+  img.onload = () => { avatarUrl = url; renderAvatars(); };
+  img.onerror = () => { avatarUrl = null; renderAvatars(); };
+  img.src = url;
+  renderAvatars();
+}
+
+async function squareJpeg(file) {
+  let src;
+  try {
+    src = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    src = await new Promise((resolve, reject) => {
+      const img = new Image();
+      const u = URL.createObjectURL(file);
+      img.onload = () => { URL.revokeObjectURL(u); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(u); reject(new Error('Dieses Bildformat wird nicht unterstützt.')); };
+      img.src = u;
+    });
+  }
+  const w = src.width;
+  const h = src.height;
+  const side = Math.min(w, h);
+  const out = Math.min(AVATAR_SIZE, side);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = out;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, (w - side) / 2, (h - side) / 2, side, side, 0, 0, out, out);
+  src.close?.();
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Bild konnte nicht verarbeitet werden.'))), 'image/jpeg', 0.88);
+  });
+}
+
+async function setAvatar(file) {
+  if (!file) return;
+  try {
+    const blob = await squareJpeg(file);
+    await ensureDir(AVATAR_DIR);
+    const res = await req('PUT', fileUrl(AVATAR), { body: blob, headers: { 'Content-Type': 'image/jpeg' } });
+    if (!res.ok) throw new HttpError(res.status);
+    loadAvatar(true);
+    toast('Profilbild gespeichert');
+  } catch (err) { reportError(err); }
+}
+
+async function removeAvatar() {
+  if (!await dialog({ title: 'Profilbild entfernen?', ok: 'Entfernen', danger: true })) return;
+  try {
+    await davDelete(fileUrl(AVATAR));
+    avatarUrl = null;
+    renderAvatars();
+  } catch (err) { reportError(err); }
+}
+
+function openProfile() {
+  $('#profile-name').textContent = ME;
+  const form = $('#password-form');
+  form.reset();
+  form.elements.username.value = ME;
+  $('#password-error').hidden = true;
+  renderAvatars();
+  $('#profile').showModal();
+}
+
+$('#profile-close').addEventListener('click', () => $('#profile').close());
+$('#profile').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+$('#profile-avatar').addEventListener('click', () => $('#avatar-input').click());
+$('#avatar-change').addEventListener('click', () => $('#avatar-input').click());
+$('#avatar-remove').addEventListener('click', removeAvatar);
+$('#avatar-input').addEventListener('change', (e) => {
+  setAvatar(e.target.files[0]);
+  e.target.value = '';
+});
+
+$('#password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const err = $('#password-error');
+  const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+  err.hidden = true;
+  if (f.next.value !== f.repeat.value) return fail('Die neuen Passwörter stimmen nicht überein.');
+  const btn = $('#password-ok');
+  btn.disabled = true;
+  try {
+    const res = await req('POST', '/api/password', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current: f.current.value, next: f.next.value }),
+    });
+    if (res.status === 429) return fail('Zu viele Versuche. Bitte kurz warten.');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return fail(data.error || errorText(res.status));
+    e.target.reset();
+    f.username.value = ME;
+    $('#profile').close();
+    toast('Passwort geändert');
+  } catch (ex) {
+    if (!(ex instanceof AuthError)) fail(ex.message === 'Failed to fetch' ? 'Server nicht erreichbar.' : ex.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---------- Ereignisse ----------
 
@@ -1883,13 +2011,17 @@ let installPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; });
 
 $('#btn-menu').addEventListener('click', async () => {
-  const items = [{ id: 'refresh', icon: 'refresh', label: 'Aktualisieren' }];
+  const items = [
+    { id: 'profile', icon: 'user', label: 'Profil' },
+    { id: 'refresh', icon: 'refresh', label: 'Aktualisieren' },
+  ];
   if (installPrompt) items.push({ id: 'install', icon: 'download', label: 'App installieren' });
   items.push({ id: 'logout', icon: 'logout', label: 'Abmelden' });
   const a = await sheet(ME ? `Angemeldet als ${ME}` : '', items);
   if (!a) return;
   if (a.id === 'refresh') { photos.stale = true; refresh({ quiet: false }); }
   if (a.id === 'logout') logout();
+  if (a.id === 'profile') openProfile();
   if (a.id === 'install') { installPrompt.prompt(); installPrompt = null; }
 });
 

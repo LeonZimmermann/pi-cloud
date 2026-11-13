@@ -55,6 +55,8 @@
       <symbol id="i-album-remove" viewBox="0 0 24 24"><use href="#i-album"/><path d="M8.5 10.5h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-move" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6c.6 0 1.2.24 1.6.66L12 6h6.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 13h7.5M13 10.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-photos" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v6.5M20.1 9.4l-6.2 2M17 19l-3.8-5.3M7 19l3.8-5.3M3.9 9.4l6.2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20c.8-3.9 3.7-6.2 7.5-6.2s6.7 2.3 7.5 6.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A2 2 0 0 1 6 6.5h2l1.4-2h5.2l1.4 2h2a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
     </defs>
   </svg>
 
@@ -82,7 +84,7 @@
           <svg class="ic"><use href="#i-search"/></svg>
           <input id="search" type="search" placeholder="In diesem Ordner suchen" autocomplete="off" enterkeyhint="search">
         </div>
-        <button class="icon-btn" id="btn-menu" aria-label="Menü"><svg class="ic"><use href="#i-more"/></svg></button>
+        <button class="icon-btn avatar-btn" id="btn-menu" aria-label="Menü"><span class="avatar avatar-sm" id="menu-avatar"></span></button>
       </div>
       <div class="toolbar">
         <nav id="crumbs" class="crumbs" aria-label="Pfad"></nav>
@@ -184,6 +186,38 @@
         <button class="btn btn-primary" id="dialog-ok" value="ok">OK</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="profile" class="dialog profile">
+    <div class="profile-body">
+      <div class="profile-head">
+        <h2>Profil</h2>
+        <button class="icon-btn sm" id="profile-close" aria-label="Schließen"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="profile-id">
+        <button class="avatar avatar-lg" id="profile-avatar" aria-label="Profilbild ändern" title="Profilbild ändern"></button>
+        <div class="profile-who">
+          <strong id="profile-name"></strong>
+          <div class="profile-pic-actions">
+            <button class="btn btn-sm" id="avatar-change"><svg class="ic"><use href="#i-camera"/></svg>Bild ändern</button>
+            <button class="btn btn-sm" id="avatar-remove" hidden>Entfernen</button>
+          </div>
+        </div>
+        <input id="avatar-input" type="file" accept="image/*" hidden>
+      </div>
+      <form id="password-form" class="profile-form" autocomplete="on">
+        <h3>Passwort ändern</h3>
+        <input name="username" autocomplete="username" hidden>
+        <label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>
+        <label>Neues Passwort<input name="next" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label>Neues Passwort wiederholen<input name="repeat" type="password" autocomplete="new-password" minlength="8" required></label>
+        <p class="profile-hint">Mindestens 8 Zeichen. Andere Geräte werden danach abgemeldet.</p>
+        <p id="password-error" class="login-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="btn btn-primary" type="submit" id="password-ok">Passwort ändern</button>
+        </div>
+      </form>
+    </div>
   </dialog>
 
   <div id="dropzone" class="dropzone" hidden><div><svg class="ic"><use href="#i-upload"/></svg><p>Zum Hochladen loslassen</p></div></div>

@@ -1,6 +1,6 @@
 # Pi Cloud
 
-Schlanker OneDrive- und Google-Fotos-Ersatz für den Raspberry Pi: ein einziger nginx-Container, kein Backend, keine Datenbank. Die Dateien bleiben auf dem Pi, die Geräte laden nur, was du öffnest.
+Schlanker OneDrive- und Google-Fotos-Ersatz für den Raspberry Pi: ein einziger nginx-Container, kein separates Backend, keine Datenbank. Die Dateien bleiben auf dem Pi, die Geräte laden nur, was du öffnest.
 
 ## Funktionen
 
@@ -21,6 +21,11 @@ Schlanker OneDrive- und Google-Fotos-Ersatz für den Raspberry Pi: ein einziger 
 - Video- und Audio-Player
 - Textvorschau
 
+**Profil** (Menü oben rechts → *Profil*):
+- Passwort ändern. Das Gerät bleibt angemeldet, alle anderen Geräte dieses Benutzers werden abgemeldet.
+- Profilbild hochladen. Es wird im Browser quadratisch zugeschnitten und als `.pi-cloud/avatar.jpg` in *Meine Dateien* gespeichert (in der App ausgeblendet).
+- Der Benutzername lässt sich nicht ändern, weil der Datenordner danach benannt ist.
+
 **App:** installierbar auf iPhone, iPad und Android.
 
 ## Speicheraufbau
@@ -31,8 +36,9 @@ Schlanker OneDrive- und Google-Fotos-Ersatz für den Raspberry Pi: ein einziger 
 │   ├── leon/             „Meine Dateien“ von leon
 │   │   └── Bilder/       leons Fotos, Unterordner = persönliche Alben
 │   └── anna/
-└── shared/               „Familie“, für alle Benutzer les- und schreibbar
-    └── Bilder/           Familienfotos, Unterordner = gemeinsame Alben
+├── shared/               „Familie“, für alle Benutzer les- und schreibbar
+│   └── Bilder/           Familienfotos, Unterordner = gemeinsame Alben
+└── .pi-cloud/            Passwort-Hashes und Sitzungsschlüssel (für Benutzer nicht erreichbar)
 ```
 
 Jeder Benutzer sieht nur seinen eigenen Ordner und `shared/`. Die Trennung macht nginx anhand der Anmeldung, die App kann sie nicht umgehen. Ordner für neue Benutzer legt der Container beim Start an.
@@ -88,6 +94,10 @@ So installierst du sie:
 
 Jede Person meldet sich einmal auf ihrem Gerät an. Das Login-Cookie gilt ein Jahr. Wenn sich ein Passwort ändert, wird nur diese Person abgemeldet.
 
+### Passwörter
+
+Die Passwörter aus `CLOUD_USERS` gelten beim ersten Start. Ändert jemand sein Passwort in der App, bleibt das neue Passwort auch über Neustarts erhalten (gespeichert in `/data/.pi-cloud/passwd`). Hat jemand sein Passwort vergessen, trägst du in der Konfiguration ein **anderes** Passwort für diese Person ein und startest den Container neu. Dann gilt wieder das Passwort aus der Konfiguration.
+
 ## Umgebungsvariablen
 
 | Variable | Standard | Bedeutung |
@@ -100,7 +110,7 @@ Jede Person meldet sich einmal auf ihrem Gerät an. Das Login-Cookie gilt ein Ja
 | `PUID` / `PGID` | `1000` | Mit dieser UID/GID schreibt nginx in `/data` |
 | `THUMBNAILS` | `on` | Vorschaubilder serverseitig erzeugen (`off` liefert Originale aus) |
 | `THUMB_CACHE` | `1g` | Maximale Größe des Vorschaubild-Caches |
-| `SESSION_SECRET` | leer | Ändern, um alle Geräte abzumelden |
+| `SESSION_SECRET` | leer | Ändern, um alle Geräte abzumelden (alternativ `/data/.pi-cloud/secret` löschen) |
 | `TLS_CERT` / `TLS_KEY` | – | Zertifikat und Schlüssel (PEM). Gesetzt, lauscht nginx zusätzlich auf Port 443 (HTTPS). Fehlen die Dateien, wird ein selbstsigniertes Zertifikat erzeugt |
 | `TLS_HOSTNAMES` | `raspberrypi` | Hostnamen (durch Leerzeichen getrennt) für das selbstsignierte Ersatz-Zertifikat |
 
@@ -123,8 +133,9 @@ Benutzernamen bestehen aus Kleinbuchstaben, Ziffern und `. _ -`. Passwörter dü
 
 ```
 Dockerfile                     nginx:alpine + App + Startskript
-nginx/40-pi-cloud.sh           erzeugt beim Start Benutzer, Tokens, Bereiche, config.json und nginx.conf
+nginx/40-pi-cloud.sh           erzeugt beim Start Benutzer, Sitzungsschlüssel, Bereiche, config.json und nginx.conf
 nginx/nginx.conf.template      /files/ (autoindex JSON + WebDAV, je Benutzer), /thumb/ (image_filter + Cache), /api/*
+nginx/pi-cloud-auth.js         njs: Login-Cookies prüfen und ausstellen, Passwort ändern (/api/password)
 app/                           Web-App (HTML/CSS/JS, Service Worker, Manifest, Icons, vendor/pdfjs)
 ```
 # pi-cloud

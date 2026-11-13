@@ -1,13 +1,14 @@
 #!/bin/sh
 # Bereitet nginx beim Containerstart vor: Worker-Benutzer mit PUID/PGID,
-# Benutzerkonten, Login-Tokens, Speicherbereiche und nginx.conf.
+# Benutzerkonten, Sitzungsschlüssel, Speicherbereiche und nginx.conf.
 set -eu
 
 TEMPLATE=/etc/nginx/pi-cloud.conf.template
 CONF=/etc/nginx/nginx.conf
-HTPASSWD=/etc/nginx/.htpasswd
-SESSIONS=/etc/nginx/pi-cloud-sessions.map
-LOGINS=/etc/nginx/pi-cloud-logins.map
+STATE=/data/.pi-cloud
+PASSWD=$STATE/passwd
+APPLIED=$STATE/applied
+KEY=/etc/nginx/pi-cloud.key
 MODULE=/etc/nginx/modules/ngx_http_image_filter_module.so
 HTML=/usr/share/nginx/html
 SPACES=/srv/spaces
@@ -49,9 +50,20 @@ if [ -z "$wuser" ]; then
     wuser=picloud
 fi
 
-: > "$HTPASSWD"; : > "$SESSIONS"; : > "$LOGINS"
 rm -rf "$SPACES"
-mkdir -p /data/users /data/shared "$SPACES"
+mkdir -p /data/users /data/shared "$SPACES" "$STATE"
+
+# Zufälliger Schlüssel, einmal erzeugt; zusammen mit SESSION_SECRET signiert
+# er die Login-Cookies.
+[ -s "$STATE/secret" ] || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$STATE/secret"
+secret="$(cat "$STATE/secret")"
+printf '%s:%s' "$secret" "${SESSION_SECRET:-}" | sha256sum | cut -d' ' -f1 > "$KEY"
+
+# Passwortdatei: In der App geänderte Passwörter bleiben erhalten. Ändert sich
+# das Passwort eines Benutzers in der Konfiguration, gilt wieder dieses
+# (so lässt sich ein vergessenes Passwort zurücksetzen).
+touch "$PASSWD" "$APPLIED"
+: > "$PASSWD.new"; : > "$APPLIED.new"
 
 printf '%s\n' "$users" | tr ',' '\n' | while IFS= read -r line; do
     line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
@@ -61,27 +73,28 @@ printf '%s\n' "$users" | tr ',' '\n' | while IFS= read -r line; do
     [ "$name" != "$line" ] && [ -n "$pass" ] || die "Ungültiger Eintrag '$name' – Format ist name:passwort."
     printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9_.-]{0,31}$' \
         || die "Ungültiger Benutzername '$name' (erlaubt: a-z, 0-9, . _ -; Kleinbuchstaben)."
-    grep -q "^$name:" "$HTPASSWD" && die "Benutzer '$name' ist doppelt eingetragen."
+    awk -F: -v n="$name" '$1 == n { f = 1 } END { exit !f }' "$PASSWD.new" && die "Benutzer '$name' ist doppelt eingetragen."
 
-    if command -v openssl >/dev/null 2>&1; then
-        hash="$(openssl passwd -apr1 "$pass")"
-    else
-        hash="{PLAIN}$pass"
+    fp="$(printf '%s:%s:%s' "$secret" "$name" "$pass" | sha256sum | cut -d' ' -f1)"
+    line="$(awk -F: -v n="$name" '$1 == n' "$PASSWD")"
+    if [ -z "$line" ] || ! grep -qx "$name:$fp" "$APPLIED"; then
+        line="$name:$(printf '%s' "$pass" | openssl passwd -5 -stdin)"
     fi
-    printf '%s:%s\n' "$name" "$hash" >> "$HTPASSWD"
-
-    # Stabiles Token: ändert sich mit Passwort oder SESSION_SECRET.
-    token="$(printf 'pi-cloud:%s:%s:%s' "$name" "$pass" "${SESSION_SECRET:-}" | sha256sum | cut -c1-48)"
-    printf '    "%s" %s;\n' "$token" "$name" >> "$SESSIONS"
-    printf '    %s %s;\n' "$name" "$token" >> "$LOGINS"
+    printf '%s\n' "$line" >> "$PASSWD.new"
+    printf '%s:%s\n' "$name" "$fp" >> "$APPLIED.new"
 
     mkdir -p "/data/users/$name" "$SPACES/$name/files"
     ln -s "/data/users/$name" "$SPACES/$name/files/home"
     ln -s /data/shared "$SPACES/$name/files/shared"
 done
 
-chown "root:$group" "$HTPASSWD"
-chmod 640 "$HTPASSWD"
+mv "$PASSWD.new" "$PASSWD"
+mv "$APPLIED.new" "$APPLIED"
+chown -R "$PUID:$PGID" "$STATE"
+chmod 700 "$STATE"
+chmod 600 "$STATE"/*
+chown "root:$group" "$KEY"
+chmod 640 "$KEY"
 chown "$PUID:$PGID" /data/users /data/shared
 for d in /data/users/*; do
     [ -d "$d" ] && [ "$(stat -c %u "$d")" = 0 ] && chown "$PUID:$PGID" "$d"
@@ -152,4 +165,4 @@ if ! su -s /bin/sh "$wuser" -c 'test -w /data/shared' 2>/dev/null; then
     log "WARNUNG: /data ist für UID $PUID nicht beschreibbar. PUID/PGID prüfen." >&2
 fi
 
-log "Benutzer: $(cut -d: -f1 "$HTPASSWD" | tr '\n' ' ')| Worker-UID $PUID:$PGID | Vorschaubilder: $thumbs | HTTPS: $tls"
+log "Benutzer: $(cut -d: -f1 "$PASSWD" | tr '\n' ' ')| Worker-UID $PUID:$PGID | Vorschaubilder: $thumbs | HTTPS: $tls"

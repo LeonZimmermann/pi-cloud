@@ -7,6 +7,7 @@
 # Dafür legt das Startskript pro Benutzer /srv/spaces/<benutzer>/files/ mit
 # zwei Symlinks an; nginx nutzt "root /srv/spaces/<angemeldeter benutzer>".
 #@LOAD_IMAGE_FILTER@
+load_module /etc/nginx/modules/ngx_http_js_module.so;
 
 user __WORKER_USER__ __WORKER_GROUP__;
 worker_processes 1;
@@ -37,11 +38,15 @@ http {
 
     map_hash_bucket_size 128;
 
-    # Login-Cookie -> Benutzer (Datei wird vom Startskript erzeugt)
-    map $cookie_pc_session $pc_cookie_user {
-        include /etc/nginx/pi-cloud-sessions.map;
-        default "";
-    }
+    # Sitzungs-Cookies prüfen und ausstellen, Passwort ändern (njs)
+    js_path   /etc/nginx/njs/;
+    js_import auth from pi-cloud-auth.js;
+    js_set    $pc_cookie_user auth.cookieUser;
+    js_set    $pc_login_token auth.loginToken;
+
+    # Gegen Durchprobieren des aktuellen Passworts
+    limit_req_zone $pc_user zone=pc_password:1m rate=6r/m;
+
     # Gültiges Cookie -> keine Basic-Auth nötig, sonst Passwortabfrage.
     map $pc_cookie_user $pc_realm {
         ""      "Pi Cloud";
@@ -51,11 +56,6 @@ http {
     map $pc_cookie_user $pc_user {
         ""      $remote_user;
         default $pc_cookie_user;
-    }
-    # Benutzer -> sein Sitzungstoken (für das Cookie nach dem Login)
-    map $remote_user $pc_login_token {
-        include /etc/nginx/pi-cloud-logins.map;
-        default "";
     }
     # Die Web-App schickt diesen Header mit und zeigt bei fehlender
     # Anmeldung ihren eigenen Login statt des Browser-Dialogs.
@@ -106,7 +106,7 @@ http {
 
         location = /api/login {
             auth_basic           "Pi Cloud";
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            auth_basic_user_file /data/.pi-cloud/passwd;
             error_page 401 = @unauth;
             add_header Set-Cookie "pc_session=$pc_login_token; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" always;
             add_header X-PC-User $remote_user always;
@@ -116,11 +116,23 @@ http {
 
         location = /api/me {
             auth_basic           $pc_realm;
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            auth_basic_user_file /data/.pi-cloud/passwd;
             error_page 401 = @unauth;
             add_header X-PC-User $pc_user always;
             add_header Cache-Control "no-store" always;
             try_files /ok.json =404;
+        }
+
+        location = /api/password {
+            auth_basic           $pc_realm;
+            auth_basic_user_file /data/.pi-cloud/passwd;
+            error_page 401 = @unauth;
+            limit_req zone=pc_password burst=5 nodelay;
+            limit_req_status 429;
+            client_max_body_size 4k;
+            client_body_buffer_size 4k;
+            client_body_in_single_buffer on;
+            js_content auth.changePassword;
         }
 
         location = /api/logout {
@@ -134,7 +146,7 @@ http {
         location ~ ^/files/[^/]*/?$ {
             root /srv/spaces/$pc_user;
             auth_basic           $pc_realm;
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            auth_basic_user_file /data/.pi-cloud/passwd;
             error_page 401 = @unauth;
             limit_except GET { deny all; }
             autoindex        on;
@@ -147,7 +159,7 @@ http {
         location /files/ {
             root /srv/spaces/$pc_user;
             auth_basic           $pc_realm;
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            auth_basic_user_file /data/.pi-cloud/passwd;
             error_page 401 = @unauth;
 
             autoindex        on;
@@ -162,7 +174,7 @@ http {
 
         location /thumb/ {
             auth_basic           $pc_realm;
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            auth_basic_user_file /data/.pi-cloud/passwd;
             error_page 401 = @unauth;
 #@IF_THUMBS@
             # Nur für die App (Cookie): /thumb/home/x.jpg -> /<benutzer>/files/home/x.jpg
