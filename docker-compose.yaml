@@ -1,0 +1,23 @@
+services:
+  pi-cloud:
+    build: .
+    container_name: pi-cloud
+    restart: unless-stopped
+    ports:
+      - "8086:443"
+    environment:
+      CLOUD_USER: leon
+      CLOUD_PASSWORD: test                   # in .env neben der Compose-Datei setzen
+      PUID: 1000                             # Ausgabe von: id -u
+      PGID: 1000                             # Ausgabe von: id -g
+      TLS_CERT: /certs/server.crt
+      TLS_KEY: /certs/server.key
+      # THUMBNAILS: "off"                    # Vorschaubilder abschalten
+      # THUMB_CACHE: 1g                      # max. Größe des Vorschaubild-Caches
+    volumes:
+      - ../pi-cloud-data:/data
+      - ../certs:/certs:ro
+      - pi-cloud-cache:/var/cache/nginx
+volumes:
+  pi-cloud-cache:
+
