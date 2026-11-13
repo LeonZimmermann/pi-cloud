@@ -1,5 +1,5 @@
 // Hält nur die App-Oberfläche vor; Dateien gehen immer direkt an den Server.
-const CACHE = 'pi-cloud-v2';
+const CACHE = 'pi-cloud-v3';
 const SHELL = ['/', '/index.html', '/app.css', '/app.js', '/manifest.webmanifest', '/icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {

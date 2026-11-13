@@ -269,6 +269,7 @@ function renderChrome() {
   $('#fab').hidden = atRoot || state.selecting;
   $('#search').placeholder = files ? (atRoot ? 'Bereiche durchsuchen' : 'In diesem Ordner suchen') : r.tab === 'albums' ? 'Alben suchen' : 'Fotos suchen';
   $('#sel-album').hidden = files;
+  $('#sel-move').hidden = !files;
   $('#sel-unalbum').hidden = r.tab !== 'album';
   $('#btn-view use').setAttribute('href', state.view === 'grid' ? '#i-list' : '#i-grid');
   $('#btn-select').classList.toggle('active', state.selecting);
@@ -959,6 +960,7 @@ async function itemMenu(it) {
     if (it.album) actions.push({ id: 'unalbum', icon: 'album-remove', label: 'Aus Album entfernen' });
   }
   actions.push({ id: 'rename', icon: 'edit', label: 'Umbenennen' });
+  if (state.route.mode === 'files') actions.push({ id: 'move', icon: 'move', label: 'Verschieben' });
   actions.push({ id: 'select', icon: 'select', label: 'Auswählen' });
   actions.push({ id: 'delete', icon: 'trash', label: 'Löschen', danger: true });
   const a = await sheet(it.name, actions);
@@ -966,6 +968,7 @@ async function itemMenu(it) {
   if (a.id === 'open') open(it);
   else if (a.id === 'download') download(it);
   else if (a.id === 'rename') rename(it);
+  else if (a.id === 'move') moveItems([it]);
   else if (a.id === 'delete') remove([it]);
   else if (a.id === 'album') addToAlbum([it]);
   else if (a.id === 'unalbum') removeFromAlbum([it]);
@@ -981,6 +984,119 @@ function open(it) {
   if (it.isAlbum) return go(albumHash(it.space, it.name));
   if (it.dir) return go(filesHash(it.segs));
   openViewer(it);
+}
+
+// ---------- Verschieben ----------
+
+// Ordnerauswahl; liefert die Ziel-Segmente oder null. Ordner in `blocked`
+// (die verschobenen Ordner selbst) können nicht betreten werden.
+let pickerResolve = null;
+function pickFolder(title, { start = [], blocked = [] } = {}) {
+  pickerResolve?.(null);
+  const isBlocked = (segs) => blocked.some((b) => b.length <= segs.length && b.every((s, i) => s === segs[i]));
+  let cur = start.length && !isBlocked(start) ? [...start] : [];
+  let seq = 0;
+  const box = $('#picker-items');
+
+  async function show(segs) {
+    const my = ++seq;
+    cur = segs;
+    $('#picker-up').style.visibility = segs.length ? '' : 'hidden';
+    $('#picker-new').style.visibility = segs.length ? '' : 'hidden';
+    $('#picker-ok').disabled = !segs.length;
+    $('#picker-path').textContent = segs.length ? [spaceLabel(segs[0]), ...segs.slice(1)].join(' / ') : 'Dateien';
+    let dirs;
+    if (!segs.length) {
+      dirs = ['home', 'shared'].map((id) => ({ name: spaceLabel(id), segs: [id], icon: id === 'home' ? 'home' : 'people' }));
+    } else {
+      box.innerHTML = '<div class="picker-empty">Wird geladen …</div>';
+      let data;
+      try { data = await listDir(segs); } catch (err) {
+        if (my !== seq) return;
+        if (err instanceof AuthError) return pickerResolve?.(null);
+        box.innerHTML = `<div class="picker-empty">${esc(err.message)}</div>`;
+        return;
+      }
+      if (my !== seq) return;
+      if (data === null) return show(parentOf(segs));
+      const coll = new Intl.Collator('de', { numeric: true, sensitivity: 'base' });
+      dirs = data.filter((e) => e.type === 'directory').map((e) => e.name).sort(coll.compare)
+        .map((name) => ({ name, segs: [...segs, name], icon: 'folder' }));
+    }
+    box.innerHTML = dirs.length
+      ? dirs.map((d, i) => `<button class="sheet-item" data-k="${i}"${isBlocked(d.segs) ? ' disabled' : ''}>${icon(d.icon)}<span>${esc(d.name)}</span></button>`).join('')
+      : '<div class="picker-empty">Keine Unterordner</div>';
+    box.onclick = (e) => {
+      const btn = e.target.closest('[data-k]');
+      if (btn && !btn.disabled) show(dirs[Number(btn.dataset.k)].segs);
+    };
+  }
+
+  $('#picker-title').textContent = title;
+  $('#picker').hidden = false;
+  show(cur);
+  return new Promise((resolve) => {
+    pickerResolve = (segs) => {
+      seq++;
+      $('#picker').hidden = true;
+      pickerResolve = null;
+      resolve(segs);
+    };
+    $('#picker-ok').onclick = () => { if (cur.length) pickerResolve?.(cur); };
+    $('#picker-up').onclick = () => { if (cur.length) show(parentOf(cur)); };
+    $('#picker-new').onclick = async () => {
+      const name = await dialog({ title: 'Neuer Ordner', input: '', ok: 'Erstellen' });
+      if (name == null || !pickerResolve) return;
+      if (!validName(name)) return toast('Ungültiger Name');
+      try {
+        await davMkcol([...cur, name]);
+        show([...cur, name]);
+      } catch (err) { reportError(err); }
+    };
+  });
+}
+$('#picker').addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) pickerResolve?.(null);
+});
+
+// Dateien und Ordner in einen anderen Ordner verschieben; bei Namenskonflikt "Name (1)"
+async function moveItems(items) {
+  items = items.filter(selectable);
+  if (!items.length) return false;
+  const one = items.length === 1;
+  const dest = await pickFolder(one ? `„${items[0].name}“ verschieben` : `${items.length} Elemente verschieben`, {
+    start: parentOf(items[0].segs),
+    blocked: items.filter((i) => i.dir).map((i) => i.segs),
+  });
+  if (!dest) return false;
+  const todo = items.filter((it) => !sameDir(parentOf(it.segs), dest));
+  if (!todo.length) { toast('Liegt schon in diesem Ordner'); return false; }
+  let moved = 0;
+  try {
+    const taken = new Set((await listDir(dest) ?? []).map((e) => e.name));
+    for (const it of todo) {
+      let name = uniqueName(it.name, taken);
+      for (let attempt = 0; ; attempt++) {
+        const target = [...dest, name];
+        try {
+          await davMove(itemUrl(it), it.dir ? dirUrl(target) : fileUrl(target));
+          break;
+        } catch (err) {
+          if (err instanceof HttpError && err.status === 412 && attempt < 5) { taken.add(name); name = uniqueName(name, taken); continue; }
+          throw err;
+        }
+      }
+      taken.add(name);
+      moved++;
+    }
+    const where = dest.length === 1 ? spaceLabel(dest[0]) : dest.at(-1);
+    toast(`${one ? 'Verschoben' : `${plural(moved, 'Element', 'Elemente')} verschoben`} nach „${where}“`);
+  } catch (err) {
+    reportError(err);
+  }
+  photos.stale = true;
+  await refresh();
+  return moved > 0;
 }
 
 // ---------- Hochladen ----------
@@ -1741,6 +1857,11 @@ $('#sel-all').addEventListener('click', () => {
 $('#sel-delete').addEventListener('click', async () => {
   if (await remove(selectedItems())) setSelecting(false);
 });
+$('#sel-move').addEventListener('click', async () => {
+  const items = selectedItems();
+  if (!items.length) return toast('Nichts ausgewählt');
+  if (await moveItems(items)) setSelecting(false);
+});
 $('#sel-download').addEventListener('click', async () => {
   const files = selectedItems().filter((i) => !i.dir);
   if (!files.length) return toast('Ordner können nicht heruntergeladen werden – nur Dateien.');
@@ -1864,6 +1985,7 @@ $('#v-more').addEventListener('click', async () => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#sheet').hidden) { sheetResolve?.(null); return; }
+  if (e.key === 'Escape' && !$('#picker').hidden && !$('#dialog').open) { pickerResolve?.(null); return; }
   if ($('#viewer').hidden || $('#dialog').open || !$('#sheet').hidden) return;
   if (e.key === 'Escape') closeViewer();
   if (e.key === 'ArrowLeft') step(-1);

@@ -92,6 +92,32 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 printf '{"sharedName":"%s","photosFolder":"%s"}\n' \
     "$(json_escape "$SHARED_NAME")" "$(json_escape "$PHOTOS_FOLDER")" > "$HTML/config.json"
 
+# HTTPS: TLS_CERT + TLS_KEY (PEM). Fehlen die Dateien, wird einmalig ein
+# selbstsigniertes Zertifikat im Cache-Volume erzeugt und wiederverwendet.
+TLS_CERT="${TLS_CERT:-}"
+TLS_KEY="${TLS_KEY:-}"
+tls=off
+if [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
+    [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] || die "TLS_CERT und TLS_KEY müssen beide gesetzt sein."
+    if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
+        self=/var/cache/nginx/tls
+        log "WARNUNG: $TLS_CERT oder $TLS_KEY fehlt – nutze selbstsigniertes Zertifikat aus $self." >&2
+        if [ ! -s "$self/server.crt" ] || [ ! -s "$self/server.key" ]; then
+            mkdir -p "$self"
+            san="DNS:localhost"
+            for n in ${TLS_HOSTNAMES:-raspberrypi}; do san="$san,DNS:$n"; done
+            openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=pi-cloud" \
+                -addext "subjectAltName=$san" \
+                -keyout "$self/server.key" -out "$self/server.crt" 2>/dev/null \
+                || die "Selbstsigniertes Zertifikat konnte nicht erzeugt werden."
+            chmod 600 "$self/server.key"
+        fi
+        TLS_CERT="$self/server.crt"
+        TLS_KEY="$self/server.key"
+    fi
+    tls=on
+fi
+
 if [ "$THUMBNAILS" = "on" ] && [ -f "$MODULE" ]; then
     thumbs=on
     load="load_module $MODULE;"
@@ -103,12 +129,19 @@ fi
 sed -e "s|__WORKER_USER__|$wuser|g" \
     -e "s|__WORKER_GROUP__|$group|g" \
     -e "s|__THUMB_CACHE__|$THUMB_CACHE|g" \
+    -e "s|__TLS_CERT__|$TLS_CERT|g" \
+    -e "s|__TLS_KEY__|$TLS_KEY|g" \
     -e "s|^#@LOAD_IMAGE_FILTER@|$load|" \
     "$TEMPLATE" > "$CONF.tmp"
 if [ "$thumbs" = on ]; then
     sed -i -e '/#@IF_NOTHUMBS@/,/#@END_NOTHUMBS@/d' -e '/#@IF_THUMBS@/d' -e '/#@END_THUMBS@/d' "$CONF.tmp"
 else
     sed -i -e '/#@IF_THUMBS@/,/#@END_THUMBS@/d' -e '/#@IF_NOTHUMBS@/d' -e '/#@END_NOTHUMBS@/d' "$CONF.tmp"
+fi
+if [ "$tls" = on ]; then
+    sed -i -e '/#@IF_TLS@/d' -e '/#@END_TLS@/d' "$CONF.tmp"
+else
+    sed -i -e '/#@IF_TLS@/,/#@END_TLS@/d' "$CONF.tmp"
 fi
 mv "$CONF.tmp" "$CONF"
 
@@ -119,4 +152,4 @@ if ! su -s /bin/sh "$wuser" -c 'test -w /data/shared' 2>/dev/null; then
     log "WARNUNG: /data ist für UID $PUID nicht beschreibbar. PUID/PGID prüfen." >&2
 fi
 
-log "Benutzer: $(cut -d: -f1 "$HTPASSWD" | tr '\n' ' ')| Worker-UID $PUID:$PGID | Vorschaubilder: $thumbs"
+log "Benutzer: $(cut -d: -f1 "$HTPASSWD" | tr '\n' ' ')| Worker-UID $PUID:$PGID | Vorschaubilder: $thumbs | HTTPS: $tls"

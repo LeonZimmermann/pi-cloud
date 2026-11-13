@@ -85,6 +85,14 @@ http {
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
+#@IF_TLS@
+        listen 443 ssl default_server;
+        listen [::]:443 ssl default_server;
+        ssl_certificate     __TLS_CERT__;
+        ssl_certificate_key __TLS_KEY__;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_session_cache   shared:SSL:1m;
+#@END_TLS@
         root /usr/share/nginx/html;
 
         location / {

@@ -7,7 +7,7 @@ Schlanker OneDrive- und Google-Fotos-Ersatz für den Raspberry Pi: ein einziger 
 **Dateien:** Dateibaum mit den Bereichen *Meine Dateien* (nur für dich) und *Familie* (für alle Benutzer). Du kannst:
 - als Liste oder in Kacheln anzeigen,
 - hochladen (mehrere Dateien und ganze Ordner, am Desktop auch per Drag & Drop),
-- neue Ordner anlegen, umbenennen, löschen, herunterladen,
+- neue Ordner anlegen, umbenennen, verschieben (auch zwischen *Meine Dateien* und *Familie*), löschen, herunterladen,
 - mehrere Elemente gleichzeitig auswählen.
 
 **Fotos:** Alle Bilder und Videos aus `Bilder/` in deinem Bereich und in `Familie/Bilder/`.
@@ -101,6 +101,8 @@ Jede Person meldet sich einmal auf ihrem Gerät an. Das Login-Cookie gilt ein Ja
 | `THUMBNAILS` | `on` | Vorschaubilder serverseitig erzeugen (`off` liefert Originale aus) |
 | `THUMB_CACHE` | `1g` | Maximale Größe des Vorschaubild-Caches |
 | `SESSION_SECRET` | leer | Ändern, um alle Geräte abzumelden |
+| `TLS_CERT` / `TLS_KEY` | – | Zertifikat und Schlüssel (PEM). Gesetzt, lauscht nginx zusätzlich auf Port 443 (HTTPS). Fehlen die Dateien, wird ein selbstsigniertes Zertifikat erzeugt |
+| `TLS_HOSTNAMES` | `raspberrypi` | Hostnamen (durch Leerzeichen getrennt) für das selbstsignierte Ersatz-Zertifikat |
 
 Benutzernamen bestehen aus Kleinbuchstaben, Ziffern und `. _ -`. Passwörter dürfen kein Komma enthalten, wenn du die Komma-Schreibweise nutzt.
 
