@@ -1,0 +1,12 @@
+FROM nginx:alpine
+
+RUN rm -f /etc/nginx/conf.d/default.conf \
+ && rm -rf /usr/share/nginx/html/* \
+ && mkdir -p /data
+
+COPY nginx/nginx.conf.template /etc/nginx/pi-cloud.conf.template
+COPY --chmod=755 nginx/40-pi-cloud.sh /docker-entrypoint.d/40-pi-cloud.sh
+COPY app/ /usr/share/nginx/html/
+
+VOLUME ["/data"]
+EXPOSE 80

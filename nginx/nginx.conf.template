@@ -1,0 +1,188 @@
+# Wird beim Containerstart von /docker-entrypoint.d/40-pi-cloud.sh
+# zu /etc/nginx/nginx.conf gerendert.
+#
+# Speicheraufteilung: Jeder Benutzer sieht unter /files/ genau zwei Ordner,
+#   /files/home/   -> /data/users/<benutzer>/
+#   /files/shared/ -> /data/shared/
+# Dafür legt das Startskript pro Benutzer /srv/spaces/<benutzer>/files/ mit
+# zwei Symlinks an; nginx nutzt "root /srv/spaces/<angemeldeter benutzer>".
+#@LOAD_IMAGE_FILTER@
+
+user __WORKER_USER__ __WORKER_GROUP__;
+worker_processes 1;
+pid /run/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    sendfile      on;
+    tcp_nopush    on;
+    server_tokens off;
+    access_log    off;
+
+    client_max_body_size 0;
+    client_body_timeout  3600s;
+    send_timeout         3600s;
+    client_body_temp_path /var/cache/nginx/upload;
+
+    gzip on;
+    gzip_types text/css application/javascript text/javascript application/json
+               application/manifest+json image/svg+xml text/plain;
+
+    map_hash_bucket_size 128;
+
+    # Login-Cookie -> Benutzer (Datei wird vom Startskript erzeugt)
+    map $cookie_pc_session $pc_cookie_user {
+        include /etc/nginx/pi-cloud-sessions.map;
+        default "";
+    }
+    # Gültiges Cookie -> keine Basic-Auth nötig, sonst Passwortabfrage.
+    map $pc_cookie_user $pc_realm {
+        ""      "Pi Cloud";
+        default off;
+    }
+    # Angemeldeter Benutzer: aus dem Cookie, sonst aus der Basic-Auth.
+    map $pc_cookie_user $pc_user {
+        ""      $remote_user;
+        default $pc_cookie_user;
+    }
+    # Benutzer -> sein Sitzungstoken (für das Cookie nach dem Login)
+    map $remote_user $pc_login_token {
+        include /etc/nginx/pi-cloud-logins.map;
+        default "";
+    }
+    # Die Web-App schickt diesen Header mit und zeigt bei fehlender
+    # Anmeldung ihren eigenen Login statt des Browser-Dialogs.
+    map $http_x_pc_app $pc_is_app {
+        ""      0;
+        default 1;
+    }
+
+#@IF_THUMBS@
+    proxy_cache_path /var/cache/nginx/thumbs levels=1:2 keys_zone=thumbs:8m
+                     max_size=__THUMB_CACHE__ inactive=365d use_temp_path=off;
+
+    # Interner Vorschaubild-Renderer, nur im Container erreichbar.
+    server {
+        listen 127.0.0.1:8081;
+        root /srv/spaces;
+        location / {
+            image_filter resize 480 480;
+            image_filter_jpeg_quality 78;
+            image_filter_webp_quality 78;
+            image_filter_interlace on;
+            image_filter_buffer 40M;
+        }
+    }
+#@END_THUMBS@
+
+    server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        root /usr/share/nginx/html;
+
+        location / {
+            try_files $uri /index.html;
+            add_header Cache-Control "no-cache";
+        }
+
+        location /vendor/ {
+            add_header Cache-Control "public, max-age=2592000";
+        }
+
+        location = /api/login {
+            auth_basic           "Pi Cloud";
+            auth_basic_user_file /etc/nginx/.htpasswd;
+            error_page 401 = @unauth;
+            add_header Set-Cookie "pc_session=$pc_login_token; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" always;
+            add_header X-PC-User $remote_user always;
+            add_header Cache-Control "no-store" always;
+            try_files /ok.json =404;
+        }
+
+        location = /api/me {
+            auth_basic           $pc_realm;
+            auth_basic_user_file /etc/nginx/.htpasswd;
+            error_page 401 = @unauth;
+            add_header X-PC-User $pc_user always;
+            add_header Cache-Control "no-store" always;
+            try_files /ok.json =404;
+        }
+
+        location = /api/logout {
+            add_header Set-Cookie "pc_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict" always;
+            add_header Cache-Control "no-store" always;
+            try_files /ok.json =404;
+        }
+
+        # /files/, /files/home/ und /files/shared/ selbst: nur lesen. So kann
+        # niemand versehentlich einen ganzen Bereich löschen oder verschieben.
+        location ~ ^/files/[^/]*/?$ {
+            root /srv/spaces/$pc_user;
+            auth_basic           $pc_realm;
+            auth_basic_user_file /etc/nginx/.htpasswd;
+            error_page 401 = @unauth;
+            limit_except GET { deny all; }
+            autoindex        on;
+            autoindex_format json;
+            add_header Cache-Control "no-cache" always;
+        }
+
+        # Dateien: Ordnerinhalt als JSON (autoindex), Download per GET,
+        # Upload/Ordner/Umbenennen/Löschen per WebDAV (PUT, MKCOL, MOVE, DELETE).
+        location /files/ {
+            root /srv/spaces/$pc_user;
+            auth_basic           $pc_realm;
+            auth_basic_user_file /etc/nginx/.htpasswd;
+            error_page 401 = @unauth;
+
+            autoindex        on;
+            autoindex_format json;
+
+            dav_methods        PUT DELETE MKCOL COPY MOVE;
+            create_full_put_path on;
+            dav_access         user:rw group:rw all:r;
+
+            add_header Cache-Control "no-cache" always;
+        }
+
+        location /thumb/ {
+            auth_basic           $pc_realm;
+            auth_basic_user_file /etc/nginx/.htpasswd;
+            error_page 401 = @unauth;
+#@IF_THUMBS@
+            # Nur für die App (Cookie): /thumb/home/x.jpg -> /<benutzer>/files/home/x.jpg
+            rewrite ^/thumb/(.*)$ /$pc_cookie_user/files/$1 break;
+            proxy_pass http://127.0.0.1:8081;
+            proxy_set_header Cookie "";
+            proxy_cache thumbs;
+            proxy_cache_key $uri$is_args$args;
+            proxy_cache_valid 200 365d;
+            proxy_cache_valid any 1m;
+            proxy_cache_lock on;
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control "private, max-age=2592000";
+#@END_THUMBS@
+#@IF_NOTHUMBS@
+            # image_filter nicht verfügbar: Originalbild ausliefern.
+            rewrite ^/thumb/(.*)$ /files/$1 last;
+#@END_NOTHUMBS@
+        }
+
+        # auth_basic hat den WWW-Authenticate-Header schon gesetzt. Für die
+        # Web-App wird daraus ein 403, damit kein Browser-Passwortdialog
+        # erscheint; andere Clients bekommen das normale 401.
+        location @unauth {
+            if ($pc_is_app) {
+                return 403;
+            }
+            return 401;
+        }
+    }
+}
